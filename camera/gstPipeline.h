@@ -32,14 +32,14 @@ public:
     void Close();
 
     // Capture YUV (NV12)
-    bool Capture( void** cpu, void** cuda, unsigned long timeout=ULONG_MAX );
+    bool Capture( void** cpu, void** cuda, uint64_t timeout=UINT64_MAX );
 
     // Capture the next image frame from the camera and convert it to float4 RGBA format,
     //	 * with pixel intensities ranging between 0.0 and 255.0.
     bool CaptureRGBA( float** image, uint64_t timeout=UINT64_MAX, bool zeroCopy=false );
 
     // Takes in captured YUV-NV12 CUDA image, converts to float4 RGBA (with pixel intensity 0-255)
-    bool ConvertRGBA( void* input, void** output );
+    bool ConvertRGBA( void* input, void** output, bool zeroCopy=false );
 
     // Image dimensions
     inline uint32_t GetWidth() const	  { return mWidth; }
