@@ -51,7 +51,7 @@ gstPipeline::~gstPipeline()
 
 
 // CaptureRGBA
-bool gstCamera::CaptureRGBA( float** output, unsigned long timeout, bool zeroCopy )
+bool gstPipeline::CaptureRGBA( float** output, unsigned long timeout, bool zeroCopy )
 {
     void* cpu = NULL;
     void* gpu = NULL;
