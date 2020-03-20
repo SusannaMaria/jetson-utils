@@ -12,9 +12,6 @@
 #include <unistd.h>
 #include <string.h>
 
-#include <QMutex>
-#include <QWaitCondition>
-
 #include "cudaMappedMemory.h"
 #include "cudaYUV.h"
 #include "cudaRGB.h"
