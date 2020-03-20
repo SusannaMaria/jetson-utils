@@ -88,6 +88,8 @@ private:
     bool     mLatestRetrieved;
 
     void* mRGBA[NUM_RINGBUFFERS];
+    bool   mRGBAZeroCopy; // were the RGBA buffers allocated with zeroCopy?
+    bool   mStreaming;	  // true if the device is currently open
 
 };
 

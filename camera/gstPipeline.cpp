@@ -24,6 +24,7 @@ gstPipeline::gstPipeline()
     mAppSink    = NULL;
     mBus        = NULL;
     mPipeline   = NULL;
+    mStreaming = false;
 
     mWidth  = 0;
     mHeight = 0;
@@ -40,13 +41,38 @@ gstPipeline::gstPipeline()
         mRingbufferGPU[n] = NULL;
         mRGBA[n]          = NULL;
     }
+
+    mRGBAZeroCopy = false;
 }
 
 
 // destructor
 gstPipeline::~gstPipeline()
 {
+    Close();
 
+    for( uint32_t n=0; n < NUM_RINGBUFFERS; n++ )
+    {
+        // free capture buffer
+        if( mRingbufferCPU[n] != NULL )
+        {
+            CUDA(cudaFreeHost(mRingbufferCPU[n]));
+
+            mRingbufferCPU[n] = NULL;
+            mRingbufferGPU[n] = NULL;
+        }
+
+        // free convert buffer
+        if( mRGBA[n] != NULL )
+        {
+            if( mRGBAZeroCopy )
+                CUDA(cudaFreeHost(mRGBA[n]));
+            else
+                CUDA(cudaFree(mRGBA[n]));
+
+            mRGBA[n] = NULL;
+        }
+    }
 }
 
 
@@ -73,23 +99,69 @@ bool gstPipeline::CaptureRGBA( float** output, unsigned long timeout, bool zeroC
 
 
 // ConvertRGBA
-bool gstPipeline::ConvertRGBA( void* input, void** output )
+bool gstPipeline::ConvertRGBA( void* input, void** output, bool zeroCopy)
 {
     if( !input || !output )
         return false;
 
-    if( !mRGBA[0] )
+    // check if the buffers were previously allocated with a different zeroCopy option
+    // if necessary, free them so they can be re-allocated with the correct option
+    if( mRGBA[0] != NULL && zeroCopy != mRGBAZeroCopy )
     {
         for( uint32_t n=0; n < NUM_RINGBUFFERS; n++ )
         {
-            if( CUDA_FAILED(cudaMalloc(&mRGBA[n], mWidth * mHeight * sizeof(float4))) )
+            if( mRGBA[n] != NULL )
             {
-                printf(LOG_CUDA "gstPipeline -- failed to allocate memory for %ux%u RGBA texture\n", mWidth, mHeight);
-                return false;
+                if( mRGBAZeroCopy )
+                    CUDA(cudaFreeHost(mRGBA[n]));
+                else
+                    CUDA(cudaFree(mRGBA[n]));
+
+                mRGBA[n] = NULL;
             }
         }
 
-        printf(LOG_CUDA "gstreamer pipeline -- allocated %u RGBA ringbuffers\n", NUM_RINGBUFFERS);
+        mRGBAZeroCopy = false;	// reset for sanity
+    }
+
+    // check if the buffers need allocated
+    if( !mRGBA[0] )
+    {
+        const size_t size = mWidth * mHeight * sizeof(float4);
+
+        for( uint32_t n=0; n < NUM_RINGBUFFERS; n++ )
+        {
+            if( zeroCopy )
+            {
+                void* cpuPtr = NULL;
+                void* gpuPtr = NULL;
+
+                if( !cudaAllocMapped(&cpuPtr, &gpuPtr, size) )
+                {
+                    printf(LOG_GSTREAMER "gstPipeline -- failed to allocate zeroCopy memory for %ux%xu RGBA texture\n", mWidth, mHeight);
+                    return false;
+                }
+
+                if( cpuPtr != gpuPtr )
+                {
+                    printf(LOG_GSTREAMER "gstPipeline -- zeroCopy memory has different pointers, please use a UVA-compatible GPU\n");
+                    return false;
+                }
+
+                mRGBA[n] = gpuPtr;
+            }
+            else
+            {
+                if( CUDA_FAILED(cudaMalloc(&mRGBA[n], size)) )
+                {
+                    printf(LOG_GSTREAMER "gstPipeline -- failed to allocate memory for %ux%u RGBA texture\n", mWidth, mHeight);
+                    return false;
+                }
+            }
+        }
+
+        printf(LOG_GSTREAMER "gstPipeline -- allocated %u RGBA ringbuffers\n", NUM_RINGBUFFERS);
+        mRGBAZeroCopy = zeroCopy;
     }
 
     if( mDepth == 12 )
@@ -143,8 +215,15 @@ GstFlowReturn gstPipeline::onBuffer(_GstAppSink* sink, void* user_data)
 
 
 // Capture
-bool gstPipeline::Capture( void** cpu, void** cuda, unsigned long timeout )
+bool gstPipeline::Capture( void** cpu, void** cuda, uint64_t timeout )
 {
+    // confirm the pipeline is streaming
+    if( !mStreaming )
+    {
+        if( !Open() )
+            return false;
+    }
+
     // wait until a new frame is received
     if( !mWaitEvent.Wait(timeout) )
         return false;
@@ -378,6 +457,9 @@ bool gstPipeline::init()
 // Open
 bool gstPipeline::Open()
 {
+    if( mStreaming )
+        return true;
+
     // transition pipline to STATE_PLAYING
     printf(LOG_GSTREAMER "gstreamer transitioning pipeline to GST_STATE_PLAYING\n");
 
@@ -408,6 +490,7 @@ bool gstPipeline::Open()
     usleep(100*1000);
     checkMsgBus();
 
+    mStreaming = true;
     return true;
 }
 
@@ -415,6 +498,9 @@ bool gstPipeline::Open()
 // Close
 void gstPipeline::Close()
 {
+    if( !mStreaming )
+        return;
+
     // stop pipeline
     printf(LOG_GSTREAMER "gstreamer transitioning pipeline to GST_STATE_NULL\n");
 
@@ -424,6 +510,7 @@ void gstPipeline::Close()
         printf(LOG_GSTREAMER "gstreamer failed to set pipeline state to PLAYING (error %u)\n", result);
 
     usleep(250*1000);
+    mStreaming = false;
 }
 
 
