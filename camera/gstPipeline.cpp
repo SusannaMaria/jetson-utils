@@ -177,7 +177,7 @@ bool gstPipeline::ConvertRGBA( void* input, float** output, bool zeroCopy)
             return false;
     }
 
-    *output     = mRGBA[mLatestRGBA];
+    *output     = (float*)mRGBA[mLatestRGBA];
     mLatestRGBA = (mLatestRGBA + 1) % NUM_RINGBUFFERS;
     return true;
 }
