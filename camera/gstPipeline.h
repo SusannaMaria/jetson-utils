@@ -8,10 +8,10 @@
 #include <gst/gst.h>
 #include <string>
 
+#include "Mutex.h"
+#include "Event.h"
 
 struct _GstAppSink;
-class QWaitCondition;
-class QMutex;
 
 
 /**
@@ -75,10 +75,9 @@ private:
     void* mRingbufferCPU[NUM_RINGBUFFERS];
     void* mRingbufferGPU[NUM_RINGBUFFERS];
 
-    QWaitCondition* mWaitEvent;
-
-    QMutex* mWaitMutex;
-    QMutex* mRingMutex;
+    Event mWaitEvent;
+    Mutex mWaitMutex;
+    Mutex mRingMutex;
 
     uint32_t mLatestRGBA;
     uint32_t mLatestRingbuffer;
