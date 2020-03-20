@@ -99,7 +99,7 @@ bool gstPipeline::CaptureRGBA( float** output, unsigned long timeout, bool zeroC
 
 
 // ConvertRGBA
-bool gstPipeline::ConvertRGBA( void* input, void** output, bool zeroCopy)
+bool gstPipeline::ConvertRGBA( void* input, float** output, bool zeroCopy)
 {
     if( !input || !output )
         return false;

@@ -39,7 +39,7 @@ public:
     bool CaptureRGBA( float** image, uint64_t timeout=UINT64_MAX, bool zeroCopy=false );
 
     // Takes in captured YUV-NV12 CUDA image, converts to float4 RGBA (with pixel intensity 0-255)
-    bool ConvertRGBA( void* input, void** output, bool zeroCopy=false );
+    bool ConvertRGBA( void* input, float** output, bool zeroCopy=false );
 
     // Image dimensions
     inline uint32_t GetWidth() const	  { return mWidth; }
