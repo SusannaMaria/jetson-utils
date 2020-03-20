@@ -50,6 +50,28 @@ gstPipeline::~gstPipeline()
 }
 
 
+// CaptureRGBA
+bool gstCamera::CaptureRGBA( float** output, unsigned long timeout, bool zeroCopy )
+{
+    void* cpu = NULL;
+    void* gpu = NULL;
+
+    if( !Capture(&cpu, &gpu, timeout) )
+    {
+        printf(LOG_GSTREAMER "gstPipeline failed to capture frame\n");
+        return false;
+    }
+
+    if( !ConvertRGBA(gpu, output, zeroCopy) )
+    {
+        printf(LOG_GSTREAMER "gstPipeline failed to convert frame to RGBA\n");
+        return false;
+    }
+
+    return true;
+}
+
+
 // ConvertRGBA
 bool gstPipeline::ConvertRGBA( void* input, void** output )
 {
