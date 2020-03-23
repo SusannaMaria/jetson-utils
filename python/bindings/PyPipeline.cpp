@@ -284,9 +284,7 @@ static PyMethodDef pyPipeline_Functions[] =
 };
 
 // Register functions
-PyMethodDef* `PyPipeline_RegisterFunctions`()
+PyMethodDef* PyPipeline_RegisterFunctions()
 {
 	return pyPipeline_Functions;
 }
-
-
