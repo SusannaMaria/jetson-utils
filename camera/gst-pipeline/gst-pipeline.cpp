@@ -4,13 +4,9 @@
 
 #include "gstPipeline.h"
 #include "glDisplay.h"
-#include "glTexture.h"
+#include "commandLine.h"
 
-#include <stdio.h>
 #include <signal.h>
-#include <unistd.h>
-
-#include "cudaNormalize.h"
 
 
 bool signal_recieved = false;
@@ -41,9 +37,9 @@ int main( int argc, char** argv )
      */
     gstPipeline* pipeline = gstPipeline::Create(
             cmdLine.GetString("pipeline"),
-            cmdLine.GetInt("width", gstPipeline->DefaultWidth),
-            cmdLine.GetInt("height", gstPipeline->DefaultHeight),
-            cmdLine.GetInt("depth", gstPipeline->DefaultDepth));
+            cmdLine.GetInt("width", gstPipeline::DefaultWidth),
+            cmdLine.GetInt("height", gstPipeline::DefaultHeight),
+            cmdLine.GetInt("depth", gstPipeline::DefaultDepth));
 
 
     if( !pipeline )
@@ -57,108 +53,64 @@ int main( int argc, char** argv )
     printf("   height:  %u\n", pipeline->GetHeight());
     printf("    depth:  %u (bpp)\n", pipeline->GetPixelDepth());
 
+
     /*
      * create openGL window
      */
     glDisplay* display = glDisplay::Create();
 
     if( !display )
-        printf("\ngst-pipeline:  failed to create openGL display\n");
+        printf("gst-pipeline:  failed to create openGL display\n");
 
-    const size_t texSz = pipeline->GetWidth() * pipeline->GetHeight() * sizeof(float4);
-    float4* texIn = (float4*)malloc(texSz);
-
-    /*if( texIn != NULL )
-        memset(texIn, 0, texSz);*/
-
-    if( texIn != NULL )
-        for( uint32_t y=0; y < pipeline->GetHeight(); y++ )
-            for( uint32_t x=0; x < pipeline->GetWidth(); x++ )
-                texIn[y*pipeline->GetWidth()+x] = make_float4(0.0f, 1.0f, 1.0f, 1.0f);
-
-    glTexture* texture = glTexture::Create(pipeline->GetWidth(), pipeline->GetHeight(), GL_RGBA32F_ARB/*GL_RGBA8*/, texIn);
-
-    if( !texture )
-        printf("gst-pipeline:  failed to create openGL texture\n");
 
     /*
      * start streaming
      */
     if( !pipeline->Open() )
     {
-        printf("\ngst-pipeline:  failed to open pipeline for streaming\n");
+        printf("gst-pipeline:  failed to open pipeline for streaming\n");
         return 0;
     }
 
     printf("\ngst-pipeline:  pipeline open for streaming\n");
 
 
+    /*
+     * processing loop
+     */
     while( !signal_recieved )
     {
-        void* imgCPU  = NULL;
-        void* imgCUDA = NULL;
+        // capture latest image
+        float* imgRGBA = NULL;
 
-        // get the latest frame
-        if( !pipeline->Capture(&imgCPU, &imgCUDA, 10000) )
-            printf("\ngst-pipeline:  failed to capture frame\n");
-        else
-            printf("gst-pipeline:  recieved new frame  CPU=0x%p  GPU=0x%p\n", imgCPU, imgCUDA);
-
-        // convert from YUV to RGBA
-        void* imgRGBA = NULL;
-
-        if( !pipeline->ConvertRGBA(imgCUDA, &imgRGBA) )
-            printf("gst-pipeline:  failed to convert from NV12 to RGBA\n");
-
-        // rescale image pixel intensities
-        CUDA(cudaNormalizeRGBA((float4*)imgRGBA, make_float2(0.0f, 255.0f),
-                               (float4*)imgRGBA, make_float2(0.0f, 1.0f),
-                               pipeline->GetWidth(), pipeline->GetHeight()));
+        if( !pipeline->CaptureRGBA(&imgRGBA, 1000) )
+            printf("gst-pipeline:  failed to capture RGBA image\n");
 
         // update display
         if( display != NULL )
         {
-            display->UserEvents();
-            display->BeginRender();
+            display->RenderOnce((float*)imgRGBA, pipeline->GetWidth(), pipeline->GetHeight());
 
-            if( texture != NULL )
-            {
-                void* tex_map = texture->MapCUDA();
+            // update status bar
+            char str[256];
+            sprintf(str, "gStreamer pipeline (%ux%u) | %.0f FPS", pipeline->GetWidth(), pipeline->GetHeight(), display->GetFPS());
+            display->SetTitle(str);
 
-                if( tex_map != NULL )
-                {
-                    cudaMemcpy(tex_map, imgRGBA, texture->GetSize(), cudaMemcpyDeviceToDevice);
-                    CUDA(cudaDeviceSynchronize());
-
-                    texture->Unmap();
-                }
-                //texture->UploadCPU(texIn);
-                texture->Render(100,100);
-            }
-
-            display->EndRender();
+            // check if the user quit
+            if( display->IsClosed() )
+                signal_recieved = true;
         }
     }
 
-    printf("\ngst-pipeline:  un-initializing video device\n");
-
 
     /*
-     * shutdown the pipeline device
+     * destroy resources
      */
-    if( pipeline != NULL )
-    {
-        delete pipeline;
-        pipeline = NULL;
-    }
+    printf("\ngst-pipeline:  shutting down...\n");
 
-    if( display != NULL )
-    {
-        delete display;
-        display = NULL;
-    }
+    SAFE_DELETE(pipeline);
+    SAFE_DELETE(display);
 
-    printf("gst-pipeline:  video device has been un-initialized.\n");
-    printf("gst-pipeline:  this concludes the test of the video device.\n");
+    printf("gst-pipeline:  shutdown complete.\n");
     return 0;
 }
