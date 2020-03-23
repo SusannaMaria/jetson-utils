@@ -66,7 +66,7 @@ static int PyPipeline_Init( PyPipeline_Object* self, PyObject *args, PyObject *k
 
 	static char* kwlist[] = {"pipeline", "width", "height", "depth", NULL};
 
-	if( !PyArg_ParseTupleAndKeywords(args, kwds, "|iis", kwlist, &strPipeline, &image_width, &image_height, &pixel_depth))
+	if( !PyArg_ParseTupleAndKeywords(args, kwds, "|siii", kwlist, &strPipeline, &image_width, &image_height, &pixel_depth))
 	{
 		PyErr_SetString(PyExc_Exception, LOG_PY_UTILS "gstPipeline.__init()__ failed to parse args tuple");
 		printf(LOG_PY_UTILS "gstPipeline.__init()__ failed to parse args tuple\n");
