@@ -231,12 +231,12 @@ static PyObject* PyPipeline_GetHeight( PyPipeline_Object* self )
 
 
 //-------------------------------------------------------------------------------
-static PyTypeObject PyPipeline_Type = 
+static PyTypeObject pyPipeline_Type =
 {
     PyVarObject_HEAD_INIT(NULL, 0)
 };
 
-static PyMethodDef PyPipeline_Methods[] = 
+static PyMethodDef pyPipeline_Methods[] =
 {
 	{ "Open", (PyCFunction)PyPipeline_Open, METH_NOARGS, "Open the pipeline for streaming frames"},
 	{ "Close", (PyCFunction)PyPipeline_Close, METH_NOARGS, "Stop streaming pipeline frames"},
@@ -252,24 +252,24 @@ bool PyPipeline_RegisterTypes( PyObject* module )
 	if( !module )
 		return false;
 
-	PyPipeline_Type.tp_name 	  = PY_UTILS_MODULE_NAME ".gstPipeline";
-	PyPipeline_Type.tp_basicsize = sizeof(PyPipeline_Object);
-	PyPipeline_Type.tp_flags 	  = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE;
-	PyPipeline_Type.tp_methods   = PyPipeline_Methods;
-	PyPipeline_Type.tp_new 	  = PyPipeline_New;
-	PyPipeline_Type.tp_init	  = (initproc)PyPipeline_Init;
-	PyPipeline_Type.tp_dealloc	  = (destructor)PyPipeline_Dealloc;
-	PyPipeline_Type.tp_doc  	  = "Generic pipeline using GStreamer";
+    pyPipeline_Type.tp_name 	  = PY_UTILS_MODULE_NAME ".gstPipeline";
+    pyPipeline_Type.tp_basicsize = sizeof(PyPipeline_Object);
+    pyPipeline_Type.tp_flags 	  = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE;
+    pyPipeline_Type.tp_methods   = pyPipeline_Methods;
+    pyPipeline_Type.tp_new 	  = PyPipeline_New;
+    pyPipeline_Type.tp_init	  = (initproc)PyPipeline_Init;
+    pyPipeline_Type.tp_dealloc	  = (destructor)PyPipeline_Dealloc;
+    pyPipeline_Type.tp_doc  	  = "Generic pipeline using GStreamer";
 	 
-	if( PyType_Ready(&PyPipeline_Type) < 0 )
+	if( PyType_Ready(&pyPipeline_Type) < 0 )
 	{
 		printf(LOG_PY_UTILS "gstPipeline PyType_Ready() failed\n");
 		return false;
 	}
 	
-	Py_INCREF(&PyPipeline_Type);
+	Py_INCREF(&pyPipeline_Type);
     
-	if( PyModule_AddObject(module, "gstPipeline", (PyObject*)&PyPipeline_Type) < 0 )
+	if( PyModule_AddObject(module, "gstPipeline", (PyObject*)&pyPipeline_Type) < 0 )
 	{
 		printf(LOG_PY_UTILS "gstPipeline PyModule_AddObject('gstPipeline') failed\n");
 		return false;
@@ -278,15 +278,15 @@ bool PyPipeline_RegisterTypes( PyObject* module )
 	return true;
 }
 
-static PyMethodDef PyPipeline_Functions[] = 
+static PyMethodDef pyPipeline_Functions[] =
 {
 	{NULL}  /* Sentinel */
 };
 
 // Register functions
-PyMethodDef* PyPipeline_RegisterFunctions()
+PyMethodDef* `PyPipeline_RegisterFunctions`()
 {
-	return PyPipeline_Functions;
+	return pyPipeline_Functions;
 }
 
 
