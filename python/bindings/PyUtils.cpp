@@ -25,6 +25,7 @@
 #include "PyGL.h"
 #include "PyCUDA.h"
 #include "PyCamera.h"
+#include "PyPipeline.h"
 #include "PyImageIO.h"
 #include "PyNumPy.h"
 
@@ -74,6 +75,7 @@ bool PyUtils_RegisterFunctions()
 	PyUtils_AddFunctions(PyGL_RegisterFunctions());
 	PyUtils_AddFunctions(PyCUDA_RegisterFunctions());
 	PyUtils_AddFunctions(PyCamera_RegisterFunctions());
+	PyUtils_AddFunctions(PyPipeline_RegisterFunctions());
 	PyUtils_AddFunctions(PyImageIO_RegisterFunctions());
 	PyUtils_AddFunctions(PyNumPy_RegisterFunctions());
 
@@ -95,6 +97,9 @@ bool PyUtils_RegisterTypes( PyObject* module )
 
 	if( !PyCamera_RegisterTypes(module) )
 		printf(LOG_PY_UTILS "failed to register Camera types\n");
+
+    if( !PyPipeline_RegisterTypes(module) )
+        printf(LOG_PY_UTILS "failed to register Pipeline types\n");
 
 	if( !PyImageIO_RegisterTypes(module) )
 		printf(LOG_PY_UTILS "failed to register ImageIO types\n");
