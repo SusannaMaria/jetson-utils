@@ -24,6 +24,12 @@
 #include "cudaNormalize.h"
 #include "timespec.h"
 
+#include <X11/Xatom.h>
+#include <X11/cursorfont.h>
+
+#include <algorithm>
+#include <cstdlib>
+
 
 //--------------------------------------------------------------
 std::vector<glDisplay*> gDisplays;
@@ -44,27 +50,34 @@ uint32_t glGetNumDisplays()
 
 const char* glDisplay::DEFAULT_TITLE = "NVIDIA Jetson";
 
+#define OriginalCursor XC_arrow
 
 // Constructor
 glDisplay::glDisplay()
 {
-	mWindowX      = 0;
-	mScreenX      = NULL;
-	mVisualX      = NULL;
-	mContextGL    = NULL;
-	mDisplayX     = NULL;
-	mRendering    = false;
-	mEnableDebug  = false;
-	mWindowClosed = false;
+	mWindowX       = 0;
+	mScreenX       = NULL;
+	mVisualX       = NULL;
+	mContextGL     = NULL;
+	mDisplayX      = NULL;
+	mRendering     = false;
+	mEnableDebug   = false;
+	mWindowClosed  = false;
+	mActiveCursor  = OriginalCursor;
+	mDefaultCursor = OriginalCursor;
+	mDragMode      = DragDefault;
 
-	mWidth        = 0;
-	mHeight       = 0;
-	mAvgTime      = 1.0f;
+	mID		     = 0;
+	mWidth         = 0;
+	mHeight        = 0;
+	mScreenWidth   = 0;
+	mScreenHeight  = 0;
+	mAvgTime       = 1.0f;
 
-	mBgColor[0]   = 0.0f;
-	mBgColor[1]   = 0.0f;
-	mBgColor[2]   = 0.0f;
-	mBgColor[3]   = 1.0f;
+	mBgColor[0]    = 0.0f;
+	mBgColor[1]    = 0.0f;
+	mBgColor[2]    = 0.0f;
+	mBgColor[3]    = 1.0f;
 
 	mNormalizedCUDA   = NULL;
 	mNormalizedWidth  = 0;
@@ -77,6 +90,9 @@ glDisplay::glDisplay()
 	mMouseDrag[0] = -1;
 	mMouseDrag[1] = -1;
 
+	mMouseDragOrigin[0] = -1;
+	mMouseDragOrigin[1] = -1;
+
 	memset(mMouseButtons, 0, sizeof(mMouseButtons));
 	memset(mKeyStates, 0, sizeof(mKeyStates));
  
@@ -84,7 +100,7 @@ glDisplay::glDisplay()
 	clock_gettime(CLOCK_REALTIME, &mLastTime);
 	
 	// register default event handler
-	RegisterEventHandler(&onEvent, this);
+	AddEventHandler(&onEvent, this);
 }
 
 
@@ -102,6 +118,9 @@ glDisplay::~glDisplay()
 			break;
 		}
 	}
+
+	// release widgets from the window
+	RemoveAllWidgets();
 
 	// release textures used during rendering
 	const size_t numTextures = mTextures.size();
@@ -130,14 +149,14 @@ glDisplay::~glDisplay()
 
 
 // Create
-glDisplay* glDisplay::Create( const char* title, float r, float g, float b, float a )
+glDisplay* glDisplay::Create( const char* title, int width, int height, float r, float g, float b, float a )
 {
 	glDisplay* vp = new glDisplay();
 	
 	if( !vp )
 		return NULL;
 		
-	if( !vp->initWindow() )
+	if( !vp->initWindow(width, height) )
 	{
 		printf(LOG_GL "failed to create X11 Window.\n");
 		delete vp;
@@ -164,22 +183,24 @@ glDisplay* glDisplay::Create( const char* title, float r, float g, float b, floa
 		vp->SetTitle(title);
 
 	vp->SetBackgroundColor(r, g, b, a);
+	
+	vp->mID = gDisplays.size();
+	gDisplays.push_back(vp);
 
 	printf(LOG_GL "glDisplay -- display device initialized\n");
-	gDisplays.push_back(vp);
 	return vp;
 }
 
 
 // Create
-glDisplay* glDisplay::Create( float r, float g, float b, float a )
+/*glDisplay* glDisplay::Create( float r, float g, float b, float a )
 {
 	return Create(DEFAULT_TITLE, r, g, b, a);
-}
+}*/
 
 
 // initWindow
-bool glDisplay::initWindow()
+bool glDisplay::initWindow( int width, int height )
 {
 	if( !mDisplayX )
 		mDisplayX = XOpenDisplay(0);
@@ -202,7 +223,14 @@ bool glDisplay::initWindow()
 	const int screenWidth = DisplayWidth(mDisplayX, screenIdx);
 	const int screenHeight = DisplayHeight(mDisplayX, screenIdx);
 	
+	if( width <= 0 )
+		width = screenWidth;
+
+	if( height <= 0 )
+		height = screenHeight;
+
 	printf(LOG_GL "glDisplay -- X screen %i resolution:  %ix%i\n", screenIdx, screenWidth, screenHeight);
+	printf(LOG_GL "glDisplay -- X window resolution:    %ix%i\n", width, height);
 	
 	Screen* screen = XScreenOfDisplay(mDisplayX, screenIdx);
 
@@ -254,8 +282,9 @@ bool glDisplay::initWindow()
 
 	
 	// create window
-	Window win = XCreateWindow(mDisplayX, winRoot, 0, 0, screenWidth, screenHeight, 0,
-						  visual->depth, InputOutput, visual->visual, CWBorderPixel|CWColormap|CWEventMask, &winAttr);
+	Window win = XCreateWindow(mDisplayX, winRoot, 0, 0, width, height, 0,
+						  visual->depth, InputOutput, visual->visual, 
+						  CWBorderPixel|CWColormap|CWEventMask, &winAttr);
 
 	if( !win )
 		return false;
@@ -275,8 +304,11 @@ bool glDisplay::initWindow()
 	mWindowX = win;
 	mScreenX = screen;
 	mVisualX = visual;
-	mWidth   = screenWidth;
-	mHeight  = screenHeight;
+	mWidth   = width;
+	mHeight  = height;
+
+	mScreenWidth  = screenWidth;
+	mScreenHeight = screenHeight;
 
 	mViewport[0] = 0; 
 	mViewport[1] = 0; 
@@ -304,6 +336,9 @@ bool glDisplay::initGL()
 		return false;
 
 	GL(glXMakeCurrent(mDisplayX, mWindowX, mContextGL));
+
+	GL(glEnable(GL_LINE_SMOOTH));
+	GL(glHint(GL_LINE_SMOOTH_HINT, GL_NICEST));
 
 	return true;
 }
@@ -368,6 +403,22 @@ void glDisplay::BeginRender( bool processEvents )
 // EndRender
 void glDisplay::EndRender()
 {
+	// render widgets
+	const size_t numWidgets = mWidgets.size();
+
+	for( size_t n=0; n < numWidgets; n++ )
+		mWidgets[n]->Render();
+
+	// dragging rect (ignore if origin inside an existing widget)
+	if( (mDragMode == DragSelect || mDragMode == DragCreate) && IsDragging(mDragMode) )
+	{
+		int x, y;
+		int width, height;
+
+		if( GetDragRect(&x, &y, &width, &height) )
+			RenderOutline(x, y, width, height, 1, 1, 1);
+	}
+
 	// present the backbuffer
 	glXSwapBuffers(mDisplayX, mWindowX);
 
@@ -421,6 +472,7 @@ void glDisplay::Render( glTexture* texture, float x, float y )
 
 	texture->Render(x,y);
 }
+
 
 // Render
 void glDisplay::Render( float* img, uint32_t width, uint32_t height, float x, float y, bool normalize )
@@ -485,22 +537,24 @@ void glDisplay::RenderOnce( float* img, uint32_t width, uint32_t height, float x
 }
 
 
+// RenderLine
+void glDisplay::RenderLine( float x1, float y1, float x2, float y2, float r, float g, float b, float a, float thickness )
+{
+	glDrawLine(x1, y1, x2, y2, r, g, b, a);
+}
+
+
+// RenderOutline
+void glDisplay::RenderOutline( float left, float top, float width, float height, float r, float g, float b, float a, float thickness )
+{
+	glDrawOutline(left, top, width, height, r, g, b, a);
+}
+
+
 // RenderRect
 void glDisplay::RenderRect( float left, float top, float width, float height, float r, float g, float b, float a )
 {
-	const float right = left + width;
-	const float bottom = top + height;
-
-	glBegin(GL_QUADS);
-
-		glColor4f(r, g, b, a);
-
-		glVertex2f(left, top);
-		glVertex2f(right, top);	
-		glVertex2f(right, bottom);
-		glVertex2f(left, bottom);
-
-	glEnd();
+	glDrawRect(left, top, width, height, r, g, b, a);
 }
 
 
@@ -511,6 +565,23 @@ void glDisplay::RenderRect( float r, float g, float b, float a )
 }
 
 
+// GetBackgroundColor
+void glDisplay::GetBackgroundColor( float* r, float* g, float* b, float* a )
+{
+	if( r != NULL )
+		*r = mBgColor[0];
+
+	if( g != NULL )
+		*g = mBgColor[1];
+
+	if( b != NULL )
+		*b = mBgColor[2];
+
+	if( a != NULL )
+		*a = mBgColor[3];
+}
+
+
 // SetBackgroundColor
 void glDisplay::SetBackgroundColor( float r, float g, float b, float a )
 {
@@ -518,6 +589,308 @@ void glDisplay::SetBackgroundColor( float r, float g, float b, float a )
 	mBgColor[1] = g; 
 	mBgColor[2] = b; 
 	mBgColor[3] = a; 
+}
+
+
+// IsMaximied
+bool glDisplay::IsMaximized()
+{
+	Atom _NET_WM_STATE = XInternAtom(mDisplayX, "_NET_WM_STATE", False);
+	Atom _NET_WM_STATE_MAXIMIZED_VERT = XInternAtom(mDisplayX, "_NET_WM_STATE_MAXIMIZED_VERT", False);
+	Atom _NET_WM_STATE_MAXIMIZED_HORZ = XInternAtom(mDisplayX, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
+
+	Atom actualType;
+	int actualFormat;
+	unsigned long numItems, bytesAfter;
+	unsigned char* propertyValue = NULL;
+	long maxLength = 1024;
+	bool maximized = false;
+
+	const int error = XGetWindowProperty(mDisplayX, mWindowX, _NET_WM_STATE,
+                        				  0, maxLength, False, XA_ATOM, &actualType,
+                        				  &actualFormat, &numItems, &bytesAfter,
+                        				  &propertyValue);
+
+	if( error != Success )
+	{
+		printf(LOG_GL "glDisplay -- failed to get window properties (error=%i)\n", error);
+		return false;
+	}
+
+	Atom* atoms = (Atom*)propertyValue;
+
+	for( unsigned long i = 0; i < numItems; i++ ) 
+	{
+		if( atoms[i] == _NET_WM_STATE_MAXIMIZED_VERT )
+			maximized = true;
+		else if( atoms[i] == _NET_WM_STATE_MAXIMIZED_HORZ)
+			maximized = true;
+ 	}
+
+	XFree(propertyValue);
+	return maximized;
+}
+
+
+// SetMaximized
+void glDisplay::SetMaximized( bool maximized )
+{
+	Atom _NET_WM_STATE = XInternAtom(mDisplayX, "_NET_WM_STATE", False);
+	Atom _NET_WM_STATE_MAXIMIZED_VERT = XInternAtom(mDisplayX, "_NET_WM_STATE_MAXIMIZED_VERT", False);
+	Atom _NET_WM_STATE_MAXIMIZED_HORZ = XInternAtom(mDisplayX, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
+
+	XEvent e;
+	memset(&e, 0, sizeof(XEvent));
+
+	e.xany.type            = ClientMessage;
+	e.xclient.message_type = _NET_WM_STATE;
+	e.xclient.format       = 32;
+	e.xclient.window       = mWindowX;
+	e.xclient.data.l[0]    = maximized ? 1 : 0;
+	e.xclient.data.l[1]    = _NET_WM_STATE_MAXIMIZED_VERT;
+	e.xclient.data.l[2]    = _NET_WM_STATE_MAXIMIZED_HORZ;
+	e.xclient.data.l[3]    = 0;
+
+	const int error = XSendEvent(mDisplayX, RootWindow(mDisplayX, 0), 0,
+                   			    SubstructureNotifyMask | SubstructureRedirectMask, 
+						    &e);
+
+	if( error == 0 )
+		printf(LOG_GL "glDisplay -- failed to %s window\n", maximized ? "maximize" : "un-maximize");
+}
+	
+
+// SetSize
+void glDisplay::SetSize( uint32_t width, uint32_t height )
+{
+	if( mWidth == width && mHeight == height )
+		return;
+
+	// un-maximized the window if new size not fullscreen
+	if( width != mScreenWidth || height != mScreenHeight )
+		SetMaximized(false);
+
+	// resize the window to the new resolution
+	const int error = XResizeWindow(mDisplayX, mWindowX, width, height);
+
+	if( error != 1 )
+	{
+		printf(LOG_GL "glDisplay -- failed to set window size to %ux%u (error=%i)\n", width, height, error);
+		return;
+	}
+
+	printf(LOG_GL "glDisplay -- set the window size to %ux%u\n", width, height); 
+
+	mWidth = width;
+	mHeight = height;
+
+	ResetViewport();
+}
+
+
+// SetCursor
+void glDisplay::SetCursor( uint32_t cursor )
+{
+	if( cursor >= XC_num_glyphs )
+	{
+		printf(LOG_GL "glDisplay -- invalid mouse cursor '%u'\n", cursor);
+		return;
+	}
+
+	if( cursor == mActiveCursor )
+		return;
+
+	printf(LOG_GL "glDisplay -- SetCursor(%u)\n", cursor);
+
+	if( !mCursors[cursor] )
+		mCursors[cursor] = XCreateFontCursor(mDisplayX, cursor);
+
+	if( !mCursors[cursor] )
+	{
+		printf(LOG_GL "glDisplay -- failed to load mouse cursor '%u'\n", cursor);
+		return;
+	}
+
+	const int error = XDefineCursor(mDisplayX, mWindowX, mCursors[cursor]);
+
+	if( error != 1 )
+	{
+		printf(LOG_GL "glDisplay -- failed to set mouse cursor '%u' (error=%i)\n", cursor, error);
+		return;
+	}
+
+	mActiveCursor = cursor;
+}
+
+
+// SetDefaultCursor
+void glDisplay::SetDefaultCursor( uint32_t cursor, bool activate )
+{
+	if( cursor >= XC_num_glyphs )
+	{
+		printf(LOG_GL "glDisplay -- invalid mouse cursor '%u'\n", cursor);
+		return;
+	}
+
+	mDefaultCursor = cursor;
+
+	if( activate )
+		ResetCursor();
+}
+
+
+// ResetCursor
+void glDisplay::ResetCursor()
+{
+	SetCursor(mDefaultCursor);
+}
+
+
+// ResetDefaultCursor
+void glDisplay::ResetDefaultCursor( bool activate )
+{
+	SetDefaultCursor(OriginalCursor, activate);
+}
+
+
+// GetDragRect
+bool glDisplay::GetDragRect( int* x, int* y, int* width, int* height )
+{
+	if( mDragMode == DragDisabled || !IsDragging() )
+		return false;
+
+	if( x != NULL )
+		*x = std::min(mMouseDragOrigin[0], mMouseDrag[0]);
+
+	if( y != NULL )
+		*y = std::min(mMouseDragOrigin[1], mMouseDrag[1]);
+
+	if( width != NULL )
+		*width = std::abs(mMouseDrag[0] - mMouseDragOrigin[0]);
+
+	if( height != NULL )
+		*height = std::abs(mMouseDrag[1] - mMouseDragOrigin[1]);
+
+	return true;
+}
+
+
+// GetDragCoords
+bool glDisplay::GetDragCoords( int* x1, int* y1, int* x2, int* y2 )
+{
+	if( mDragMode == DragDisabled || !IsDragging() )
+		return false;
+
+	if( x1 != NULL )
+		*x1 = std::min(mMouseDragOrigin[0], mMouseDrag[0]);
+
+	if( y1 != NULL )
+		*y1 = std::min(mMouseDragOrigin[1], mMouseDrag[1]);
+
+	if( x2 != NULL )
+		*x2 = std::max(mMouseDragOrigin[0], mMouseDrag[0]);
+
+	if( y2 != NULL )
+		*y2 = std::max(mMouseDragOrigin[1], mMouseDrag[1]);
+
+	return true;
+}
+
+
+// AddWidget
+glWidget* glDisplay::AddWidget( glWidget* widget )
+{
+	if( !widget )
+		return NULL;
+
+	mWidgets.push_back(widget);
+	widget->setDisplay(this);
+
+	return widget;
+}
+
+
+// RemoveWidget
+void glDisplay::RemoveWidget( glWidget* widget, bool deleteWidget )
+{
+	const int index = GetWidgetIndex(widget);
+
+	if( index < 0 )
+		return;
+
+	RemoveWidget(index, deleteWidget);
+}
+
+
+// RemoveWidget
+void glDisplay::RemoveWidget( uint32_t n, bool deleteWidget )
+{
+	mWidgets[n]->setDisplay(NULL);
+	
+	if( deleteWidget )
+		delete mWidgets[n];
+
+	mWidgets[n] = NULL;
+	mWidgets.erase(mWidgets.begin()+n);
+}
+
+
+// RemoveAllWidgets
+void glDisplay::RemoveAllWidgets( bool deleteWidgets )
+{
+	const size_t numWidgets = mWidgets.size();
+
+	for( size_t n=0; n < numWidgets; n++ )
+		RemoveWidget(n, deleteWidgets);
+
+	mWidgets.clear();
+}
+
+
+// GetWidgetIndex
+int glDisplay::GetWidgetIndex( const glWidget* widget ) const
+{
+	const size_t numWidgets = mWidgets.size();
+
+	for( size_t n=0; n < numWidgets; n++ )
+	{
+		if( mWidgets[n] == widget )
+			return n;
+	}
+
+	return -1;
+}
+
+
+// FindWidget
+glWidget* glDisplay::FindWidget( int x, int y )
+{
+	const size_t numWidgets = mWidgets.size();
+
+	for( size_t n=0; n < numWidgets; n++ )
+	{
+		if( mWidgets[n]->Contains(x,y) )
+			return mWidgets[n];
+	}
+
+	return NULL;
+}
+
+
+// FindWidgets
+std::vector<glWidget*> glDisplay::FindWidgets( int x, int y )
+{
+	std::vector<glWidget*> widgets;
+
+	const size_t numWidgets = mWidgets.size();
+
+	for( size_t n=0; n < numWidgets; n++ )
+	{
+		if( mWidgets[n]->Contains(x,y) )
+			widgets.push_back(mWidgets[n]);
+	}
+
+	return widgets;
 }
 
 
@@ -587,17 +960,52 @@ void glDisplay::ProcessEvents()
 			{
 				// handle mouse wheel scrolling
 				if( evt.xbutton.button == MOUSE_WHEEL_UP )
+				{
 					dispatchEvent(MOUSE_WHEEL, -1, 0);
+				}
 				else if( evt.xbutton.button == MOUSE_WHEEL_DOWN )
+				{
 					dispatchEvent(MOUSE_WHEEL, 1, 0);
+				}
+				else if( evt.xbutton.button == MOUSE_LEFT && mDragMode != DragDisabled )
+				{
+					// kick off dragging (except when in Creation mode and inside another widget)
+					if( !(mDragMode == DragCreate && FindWidget(mMousePos[0], mMousePos[1]) != NULL) )
+					{
+						mMouseDragOrigin[0] = mMousePos[0];
+						mMouseDragOrigin[1] = mMousePos[1];
+					}
+				}
 			}
 			else
 			{
 				// reset drag when left button released
 				if( evt.xbutton.button == MOUSE_LEFT )
 				{
+					if( IsDragging(mDragMode) /*&& FindWidget(mMouseDragOrigin[0], mMouseDragOrigin[1]) == NULL*/ )
+					{
+						if( mDragMode == DragCreate )
+						{
+							int x, y;
+							int width, height;
+
+							GetDragRect(&x, &y, &width, &height);
+
+							glWidget* widget = new glWidget(x, y, width, height);
+
+							widget->SetMoveable(true);
+							widget->SetResizeable(true);
+
+							AddWidget(widget);
+							dispatchEvent(WIDGET_CREATED, GetNumWidgets()-1, 0);
+						}					
+					}
+
 					mMouseDrag[0] = -1;
 					mMouseDrag[1] = -1;
+
+					mMouseDragOrigin[0] = -1;
+					mMouseDragOrigin[1] = -1;
 				}
 			}
 		}
@@ -616,9 +1024,9 @@ void glDisplay::ProcessEvents()
 			dispatchEvent(MOUSE_ABSOLUTE, evt.xmotion.x_root + attr.x, evt.xmotion.y_root + attr.y);
 
 			// handle drag events
-			if( evt.xmotion.state & Button1Mask )
+			if( mDragMode != DragDisabled && (evt.xmotion.state & Button1Mask) )
 			{
-				if( mMouseDrag[0] >= 0 && mMouseDrag[1] >= 0 )
+				if( IsDragging() )
 				{
 					const int delta_x = evt.xmotion.x - mMouseDrag[0];
 					const int delta_y = evt.xmotion.y - mMouseDrag[1];
@@ -630,6 +1038,10 @@ void glDisplay::ProcessEvents()
 				mMouseDrag[0] = evt.xmotion.x;
 				mMouseDrag[1] = evt.xmotion.y;
 			}
+
+			// reset mouse cursor when outside of widgets
+			if( FindWidget(mMousePos[0], mMousePos[1]) == NULL )
+				ResetCursor();
 		}
 		else if( evt.type == ConfigureNotify )
 		{
@@ -644,7 +1056,7 @@ void glDisplay::ProcessEvents()
 				if( mViewport[2] == prevWidth && mViewport[3] == prevHeight )
 					SetViewport(0, 0, evt.xconfigure.width, evt.xconfigure.height);
 
-				dispatchEvent(WINDOW_RESIZE, mWidth, mHeight);
+				dispatchEvent(WINDOW_RESIZED, mWidth, mHeight);
 			}
 		}
 		else if( evt.type == ClientMessage )
@@ -656,8 +1068,8 @@ void glDisplay::ProcessEvents()
 }
 
 
-// RegisterEventHandler
-void glDisplay::RegisterEventHandler( glEventHandler callback, void* user )
+// AddEventHandler
+void glDisplay::AddEventHandler( glEventHandler callback, void* user )
 {
 	if( !callback )
 		return;
@@ -706,7 +1118,7 @@ void glDisplay::RemoveEventHandler( glEventHandler callback, void* user )
 }
 
 // dispatchEvent
-void glDisplay::dispatchEvent( glEventType msg, int a, int b )
+void glDisplay::dispatchEvent( uint16_t msg, int a, int b )
 {
 	const uint32_t numHandlers = mEventHandlers.size();
 
@@ -795,10 +1207,23 @@ bool glDisplay::onEvent( uint16_t msg, int a, int b, void* user )
 
 			break;
 		}
-		case WINDOW_RESIZE:
+		case WIDGET_CREATED:
 		{
 			if( display->mEnableDebug )
-				printf(LOG_GL "glDisplay -- event WINDOW_RESIZE (%i, %i)\n", a, b);
+			{
+				float x1, y1;
+				float x2, y2;
+
+				display->GetWidget(a)->GetCoords(&x1, &y1, &x2, &y2);
+				printf(LOG_GL "glDisplay -- event WIDGET_CREATE (%i, %i) (%i, %i) (index=%i)\n", (int)x1, (int)y1, (int)x2, (int)y2, a);
+			}
+
+			break;
+		}
+		case WINDOW_RESIZED:
+		{
+			if( display->mEnableDebug )
+				printf(LOG_GL "glDisplay -- event WINDOW_RESIZED (%i, %i)\n", a, b);
 
 			return true;
 		}
@@ -808,6 +1233,20 @@ bool glDisplay::onEvent( uint16_t msg, int a, int b, void* user )
 			display->mWindowClosed = true;
 			return true;
 		}
+	}
+
+	// dispatch event to applicable widgets
+	const size_t numWidgets = display->mWidgets.size();
+
+	for( size_t n=0; n < numWidgets; n++ )
+	{
+		glWidget* widget = display->mWidgets[n];
+
+		if( !widget->IsVisible() )
+			continue;
+
+		if( widget->Contains(display->mMousePos[0], display->mMousePos[1]) || widget->mDragState != glWidget::DragNone )
+			widget->OnEvent(msg, a, b, user);
 	}
 
 	return false;
